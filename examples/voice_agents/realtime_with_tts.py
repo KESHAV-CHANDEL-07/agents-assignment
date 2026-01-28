@@ -12,13 +12,9 @@ logger.setLevel(logging.INFO)
 
 load_dotenv()
 
-# This example is showing a half-cascade realtime LLM usage where we:
-# - use a multimodal/realtime LLM that takes audio input, generating text output
-# - then use a separate TTS to synthesize audio output
-#
-# This approach fully utilizes the realtime LLM's ability to understand directly from audio
-# and yet maintains control of the pipeline, including using custom voices with TTS
-
+# word lists
+IGNORE_WORDS = {"yeah", "ok", "okay", "hmm", "oh", "right"}
+INTERRUPT_WORDS = {"stop", "wait", "no","listen","Wrong"}
 
 class WeatherAgent(Agent):
     def __init__(self) -> None:
@@ -31,12 +27,6 @@ class WeatherAgent(Agent):
 
     @function_tool
     async def get_weather(self, location: str):
-        """Called when the user asks about the weather.
-
-        Args:
-            location: The location to get the weather for
-        """
-
         logger.info(f"getting weather for {location}")
         return f"The weather in {location} is sunny, and the temperature is 20 degrees Celsius."
 
@@ -48,14 +38,45 @@ server = AgentServer()
 async def entrypoint(ctx: JobContext):
     session = AgentSession()
 
+    # agent speaking state
+    session.agent_is_speaking = False
+
+    @session.on("audio_segment_start")
+    def _on_audio_start():
+        session.agent_is_speaking = True
+
+    @session.on("audio_segment_end")
+    def _on_audio_end():
+        session.agent_is_speaking = False
+
+    #STT-based interruption logic
+    @session.on("transcript")
+    async def _on_transcript(msg):
+        text = msg.text.lower().strip()
+        words = text.split()
+
+        if session.agent_is_speaking:
+            if any(w in INTERRUPT_WORDS for w in words):
+                await session.interrupt()
+                return
+
+            if all(w in IGNORE_WORDS for w in words):
+                return
+
+            await session.interrupt()
+            return
+
+        await session.generate_reply(instructions=text)
+
     await session.start(
         agent=WeatherAgent(),
         room=ctx.room,
         room_options=room_io.RoomOptions(
             text_output=True,
-            audio_output=True,  # you can also disable audio output to use text modality only
+            audio_output=True,
         ),
     )
+
     session.generate_reply(instructions="say hello to the user in English")
 
 

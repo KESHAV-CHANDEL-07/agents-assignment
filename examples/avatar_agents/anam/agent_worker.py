@@ -13,7 +13,6 @@ load_dotenv()
 
 server = AgentServer()
 
-
 @server.rtc_session()
 async def entrypoint(ctx: JobContext):
     session = AgentSession(
